@@ -286,6 +286,25 @@ export class Resolver {
     return undefined;
   }
 
+  /**
+   * Tipo de una variable bajo el cursor (declarado `as Clase` o inferido por los plugins,
+   * p.ej. `loX = _screen.zoo.CrearObjeto("X")`) y las clases indexadas que le corresponden.
+   */
+  private variableTarget(word: string, ctx: CursorContext): Pick<ResolvedTarget, 'classes' | 'multi' | 'receiverType'> | undefined {
+    const type = this.resolveChainType([word], ctx);
+    if (!type?.classNames.length) return undefined;
+    const seen = new Set<string>();
+    const classes: ClassEntry[] = [];
+    for (const cn of type.classNames) {
+      const c = this.index.getClass(cn, { fromUri: ctx.uri });
+      if (!c || seen.has(c.decl.name.toLowerCase())) continue;
+      seen.add(c.decl.name.toLowerCase());
+      classes.push(c);
+    }
+    if (!classes.length) return undefined;
+    return { classes, multi: classes.length > 1 || undefined, receiverType: type };
+  }
+
   /** Miembros candidatos por nombre cuando no se conoce el tipo del receptor. */
   fallbackByName(word: string, ctx: CursorContext, limit = 50): MemberEntry[] {
     const all = this.index.membersNamed(word).filter((m) => m.owner);
@@ -409,7 +428,8 @@ export class Resolver {
       if (chain && chain.length === 0) chain = this.withChain(ctx);
       if (chain && chain.length === 1 && chain[0].toLowerCase() === 'm') {
         const v = this.localVar(word, ctx);
-        return v ? { ...base, kind: 'variable', variable: v } : base;
+        const typed = this.variableTarget(word, ctx);
+        return v || typed ? { ...base, kind: 'variable', variable: v, ...typed } : base;
       }
       const r = this.resolveMember(word, chain, ctx);
       return { ...base, kind: 'member', ...r };
@@ -423,9 +443,10 @@ export class Resolver {
       if (procs.length) return { ...base, kind: 'procedure', members: procs.slice(0, 1) };
     }
 
-    // 9. Variable local / parámetro
+    // 9. Variable local / parámetro (con su tipo declarado o inferido: fábricas, asignaciones)
     const v = this.localVar(word, ctx);
-    if (v) return { ...base, kind: 'variable', variable: v };
+    const typed = lower === 'm' ? undefined : this.variableTarget(word, ctx);
+    if (v || typed) return { ...base, kind: 'variable', variable: v, ...typed };
 
     // 10. Nombre de clase o procedimiento
     const classes = this.index.classEntries(word, { fromUri: ctx.uri });

@@ -105,16 +105,24 @@ export function definitionLocations(target: ResolvedTarget | undefined): Locatio
   }
 }
 
-/** F12 incluyendo variables locales (necesita el URI del documento). */
+/**
+ * F12 incluyendo variables locales (necesita el URI del documento).
+ * Una variable de tipo objeto conocido (declarado o inferido) navega a su clase;
+ * si no, a su declaración.
+ */
 export function definitionWithLocals(target: ResolvedTarget | undefined, ctx: CursorContext): Location[] {
-  if (target?.kind === 'variable' && target.variable) return [loc(ctx.uri, target.variable.range)];
+  if (target?.kind === 'variable') {
+    const classes = target.classes ?? [];
+    if (classes.length) return (target.multi ? classes : classes.slice(0, 1)).map((c) => loc(c.decl.uri, c.decl.nameRange));
+    return target.variable ? [loc(ctx.uri, target.variable.range)] : [];
+  }
   return definitionLocations(target);
 }
 
 /** Ctrl+F12: subclases de una clase u overrides de un método. */
 export function implementationLocations(index: SymbolIndex, target: ResolvedTarget | undefined): Location[] {
   if (!target) return [];
-  if (target.kind === 'class') {
+  if (target.kind === 'class' || target.kind === 'variable') {
     const result: Location[] = [];
     for (const c of target.classes ?? []) {
       for (const d of index.descendants(c.decl.name)) result.push(loc(d.decl.uri, d.decl.nameRange));

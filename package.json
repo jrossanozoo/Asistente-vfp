@@ -1,0 +1,159 @@
+{
+  "name": "asistente-vfp",
+  "displayName": "Asistente VFP",
+  "description": "Navegación semántica, ayuda contextual y docstrings NOTE para Visual FoxPro (.prg).",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "vfp",
+    "foxpro",
+    "visual foxpro",
+    "prg",
+    "docstring"
+  ],
+  "activationEvents": [
+    "onLanguage:foxpro",
+    "workspaceContains:**/*.prg",
+    "workspaceContains:**/*.PRG"
+  ],
+  "main": "./dist/client.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "foxpro",
+        "aliases": [
+          "Visual FoxPro",
+          "VFP",
+          "FoxPro"
+        ],
+        "extensions": [
+          ".prg",
+          ".PRG"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "foxpro",
+        "scopeName": "source.foxpro.asistente",
+        "path": "./syntaxes/foxpro.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "foxpro",
+        "path": "./snippets/foxpro.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "asistenteVfp.reindex",
+        "title": "Asistente VFP: Reindexar workspace"
+      }
+    ],
+    "configuration": {
+      "title": "Asistente VFP",
+      "properties": {
+        "vfp.extraRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Carpetas adicionales con fuentes `.prg` que se indexan para resolver clases (por ejemplo repos hermanos). Relativas a la primera carpeta del workspace o absolutas."
+        },
+        "vfp.downstreamRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Carpetas de proyectos que **consumen** este código. Se usan solo para *Go to Implementation* y *Type Hierarchy* (subclases y overrides), nunca para resolver tipos."
+        },
+        "vfp.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**",
+            "**/.git/**",
+            "**/bin/**",
+            "**/obj/**"
+          ],
+          "description": "Globs que no se indexan."
+        },
+        "vfp.index.headersOnly": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/*Generated*/**"
+          ],
+          "markdownDescription": "Globs de archivos que se indexan solo por encabezados (`define class`, `function`, `procedure`). Útil para código generado muy voluminoso."
+        },
+        "vfp.index.maxFileSizeKB": {
+          "type": "number",
+          "default": 512,
+          "description": "Archivos más grandes que este tamaño se indexan solo por encabezados."
+        },
+        "vfp.docstring.fallbackComments": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Si un método no tiene `NOTE`, mostrar en el hover los comentarios `*`, `*!*` o `&&` que están justo encima."
+        },
+        "vfp.features.documentSymbols": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Proveer el Outline. Apagarlo si otra extensión (por ejemplo zoo-tool-kit) ya lo provee y se ven duplicados."
+        },
+        "vfp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traza de la comunicación con el servidor de lenguaje."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "package": "npm run typecheck && npm run build -- --production && vsce package --no-dependencies --allow-missing-repository"
+  },
+  "dependencies": {
+    "fast-glob": "3.3.2",
+    "iconv-lite": "0.6.3",
+    "picomatch": "^2.3.1",
+    "vscode-languageclient": "9.0.1",
+    "vscode-languageserver": "9.0.1",
+    "vscode-languageserver-textdocument": "1.0.12",
+    "vscode-languageserver-types": "3.17.5",
+    "vscode-uri": "3.0.8"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.6",
+    "@types/picomatch": "^2.3.4",
+    "@types/vscode": "1.88.0",
+    "@vscode/vsce": "3.2.1",
+    "esbuild": "0.24.0",
+    "typescript": "5.6.3",
+    "vitest": "2.1.8"
+  }
+}

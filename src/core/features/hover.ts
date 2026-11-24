@@ -35,6 +35,34 @@ export function memberHover(index: SymbolIndex, m: MemberEntry): string[] {
   return out;
 }
 
+const MAX_LISTED = 25;
+
+/**
+ * Métodos y propiedades públicos de una clase (incluidos los heredados, el más cercano gana),
+ * con el resumen de su doc. Para el hover de una variable de tipo objeto.
+ */
+export function membersSummary(index: SymbolIndex, c: ClassEntry): string[] {
+  const all = index.allMembers(c.decl.name, { fromUri: c.decl.uri }).filter((m) => m.decl.visibility === 'public');
+  const line = (m: MemberEntry): string => {
+    const d = m.decl;
+    const name = d.kind === 'method' ? `${d.name}(${d.params.length ? ' ' + d.params.map((p) => p.name).join(', ') + ' ' : ''})` : d.name;
+    const summary = index.effectiveDoc(m).doc?.summary?.trim();
+    const owner = m.owner && m.owner.decl.name.toLowerCase() !== c.decl.name.toLowerCase() ? ` _(${m.owner.decl.name})_` : '';
+    return `- \`${name}\`${summary ? ` — ${summary}` : ''}${owner}`;
+  };
+  const section = (title: string, list: MemberEntry[]): string | undefined => {
+    if (!list.length) return undefined;
+    const shown = list.slice(0, MAX_LISTED).map(line).join('\n');
+    return `**${title}** (${list.length})\n\n${shown}${list.length > MAX_LISTED ? `\n- … y ${list.length - MAX_LISTED} más` : ''}`;
+  };
+  const out: string[] = [];
+  const methods = section('Métodos', all.filter((m) => m.decl.kind === 'method'));
+  const props = section('Propiedades', all.filter((m) => m.decl.kind === 'property' || m.decl.kind === 'object'));
+  if (methods) out.push(methods);
+  if (props) out.push(props);
+  return out;
+}
+
 export function hoverMarkdown(index: SymbolIndex, target: ResolvedTarget | undefined, extra: string[] = []): string | undefined {
   if (!target) return undefined;
   let out: string[] = [];
@@ -63,12 +91,21 @@ export function hoverMarkdown(index: SymbolIndex, target: ResolvedTarget | undef
       break;
     }
     case 'variable': {
-      const v = target.variable!;
-      let sig = `${v.kind === 'parameter' ? 'lparameters' : v.kind} ${v.name}`;
-      if (v.type) sig += ` as ${v.type}`;
-      if (v.lib) sig += ` of ${v.lib}`;
+      const v = target.variable;
+      const classes = target.classes ?? [];
+      let sig = v ? `${v.kind === 'parameter' ? 'lparameters' : v.kind} ${v.name}` : target.word;
+      if (v?.type) sig += ` as ${v.type}`;
+      if (v?.lib) sig += ` of ${v.lib}`;
+      const declared = v?.type?.toLowerCase();
+      if (classes.length && classes[0].decl.name.toLowerCase() !== declared) sig += `  && → ${classes.map((c) => c.decl.name).join(' | ')}`;
       out.push(codeBlock(sig));
-      if (v.type && index.hasClass(v.type)) {
+      if (classes.length) {
+        out.push(...classHover(index, classes[0]));
+        if (classes.length > 1) {
+          out.push('**Candidatas:** ' + classes.map((c) => `\`${c.decl.name}\` (${c.layer.label})`).join(', '));
+        }
+        out.push(...membersSummary(index, classes[0]));
+      } else if (v?.type && index.hasClass(v.type)) {
         const c = index.getClass(v.type)!;
         if (c.decl.doc) out.push(docToMarkdown(c.decl.doc));
       }

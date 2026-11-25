@@ -63,6 +63,20 @@ export function membersSummary(index: SymbolIndex, c: ClassEntry): string[] {
   return out;
 }
 
+/**
+ * Bloque común para un objeto de tipo conocido (variable o propiedad): la clase con su doc,
+ * las candidatas por producto y sus métodos y propiedades públicos.
+ */
+export function typedObjectSection(index: SymbolIndex, classes: ClassEntry[]): string[] {
+  if (!classes.length) return [];
+  const out = classHover(index, classes[0]);
+  if (classes.length > 1) {
+    out.push('**Candidatas:** ' + classes.map((c) => `\`${c.decl.name}\` (${c.layer.label})`).join(', '));
+  }
+  out.push(...membersSummary(index, classes[0]));
+  return out;
+}
+
 export function hoverMarkdown(index: SymbolIndex, target: ResolvedTarget | undefined, extra: string[] = []): string | undefined {
   if (!target) return undefined;
   let out: string[] = [];
@@ -88,6 +102,11 @@ export function hoverMarkdown(index: SymbolIndex, target: ResolvedTarget | undef
         out.push(...memberHover(index, list[0]));
         if (target.heuristic) out.push('_Resolución heurística (por nombre)._');
       }
+      if (target.classes?.length && !target.heuristic) {
+        // Propiedad con tipo deducido: lo mismo que el hover de una variable de ese tipo.
+        out.push(`**Tipo deducido:** ${target.classes.map((c) => `\`${c.decl.name}\``).join(' | ')}`);
+        out.push(...typedObjectSection(index, target.classes));
+      }
       break;
     }
     case 'variable': {
@@ -100,11 +119,7 @@ export function hoverMarkdown(index: SymbolIndex, target: ResolvedTarget | undef
       if (classes.length && classes[0].decl.name.toLowerCase() !== declared) sig += `  && → ${classes.map((c) => c.decl.name).join(' | ')}`;
       out.push(codeBlock(sig));
       if (classes.length) {
-        out.push(...classHover(index, classes[0]));
-        if (classes.length > 1) {
-          out.push('**Candidatas:** ' + classes.map((c) => `\`${c.decl.name}\` (${c.layer.label})`).join(', '));
-        }
-        out.push(...membersSummary(index, classes[0]));
+        out.push(...typedObjectSection(index, classes));
       } else if (v?.type && index.hasClass(v.type)) {
         const c = index.getClass(v.type)!;
         if (c.decl.doc) out.push(docToMarkdown(c.decl.doc));

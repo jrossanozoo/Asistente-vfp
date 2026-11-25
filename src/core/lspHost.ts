@@ -14,6 +14,8 @@ import {
   definitionWithLocals,
   documentSymbols,
   implementationLocations,
+  typeDefinitionLocations,
+  declarationLocations,
   prepareTypeHierarchy,
   subtypes,
   supertypes,
@@ -137,6 +139,8 @@ export class LspHost {
       hoverProvider: true,
       definitionProvider: true,
       implementationProvider: true,
+      typeDefinitionProvider: true,
+      declarationProvider: true,
       typeHierarchyProvider: true,
       documentSymbolProvider: true,
       workspaceSymbolProvider: true,
@@ -212,6 +216,16 @@ export class LspHost {
       const ctx = await this.cursorContext(p.textDocument.uri, p.position);
       if (!ctx) return [];
       return implementationLocations(this.index, this.resolver.resolveAt(ctx));
+    });
+    c.onDeclaration(async (p) => {
+      const ctx = await this.cursorContext(p.textDocument.uri, p.position);
+      if (!ctx) return [];
+      return declarationLocations(this.resolver.resolveAt(ctx), ctx);
+    });
+    c.onTypeDefinition(async (p) => {
+      const ctx = await this.cursorContext(p.textDocument.uri, p.position);
+      if (!ctx) return [];
+      return typeDefinitionLocations(this.index, this.resolver.typeAt(ctx), ctx);
     });
     c.onSignatureHelp(async (p) => {
       const ctx = await this.cursorContext(p.textDocument.uri, p.position);

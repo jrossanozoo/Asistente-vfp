@@ -293,6 +293,13 @@ export class Resolver {
   private variableTarget(word: string, ctx: CursorContext): Pick<ResolvedTarget, 'classes' | 'multi' | 'receiverType'> | undefined {
     const type = this.resolveChainType([word], ctx);
     if (!type?.classNames.length) return undefined;
+    const classes = this.classesOf(type, ctx);
+    if (!classes.length) return undefined;
+    return { classes, multi: classes.length > 1 || undefined, receiverType: type };
+  }
+
+  /** Clases indexadas de un tipo, sin repetir, en el orden de precedencia. */
+  private classesOf(type: TypeResult, ctx: CursorContext): ClassEntry[] {
     const seen = new Set<string>();
     const classes: ClassEntry[] = [];
     for (const cn of type.classNames) {
@@ -301,13 +308,19 @@ export class Resolver {
       seen.add(c.decl.name.toLowerCase());
       classes.push(c);
     }
-    if (!classes.length) return undefined;
-    return { classes, multi: classes.length > 1 || undefined, receiverType: type };
+    return classes;
   }
 
   /** Miembros candidatos por nombre cuando no se conoce el tipo del receptor. */
   fallbackByName(word: string, ctx: CursorContext, limit = 50): MemberEntry[] {
-    const all = this.index.membersNamed(word).filter((m) => m.owner);
+    let all = this.index.membersNamed(word).filter((m) => m.owner);
+    const excluders = this.plugins().filter((p) => p.excludeHeuristic);
+    if (excluders.length) {
+      const api = this.api();
+      const kept = all.filter((m) => !excluders.some((p) => p.excludeHeuristic!(m.decl.uri, api)));
+      // Si el filtro deja la lista vacía, mejor mostrar algo que nada.
+      if (kept.length) all = kept;
+    }
     const hierarchy = new Set<string>();
     if (ctx.cls) for (const n of this.index.hierarchyNames(ctx.cls)) hierarchy.add(n.toLowerCase());
     const referenced = new Set(ctx.parsed.referencedClasses.map((s) => s.toLowerCase()));
@@ -432,6 +445,13 @@ export class Resolver {
         return v || typed ? { ...base, kind: 'variable', variable: v, ...typed } : base;
       }
       const r = this.resolveMember(word, chain, ctx);
+      // Propiedad con tipo deducido (`this.oX = CrearObjeto("X")`): además de la declaración, su clase.
+      const m0 = r.members?.[0];
+      if (chain && !r.heuristic && m0 && (m0.decl.kind === 'property' || m0.decl.kind === 'object')) {
+        const t = this.resolveChainType([...chain, word], ctx);
+        const classes = t && !t.heuristic ? this.classesOf(t, ctx) : [];
+        if (classes.length) return { ...base, kind: 'member', ...r, classes };
+      }
       return { ...base, kind: 'member', ...r };
     }
 
@@ -454,6 +474,45 @@ export class Resolver {
     const procs = this.index.procedures(word, { fromUri: ctx.uri });
     if (procs.length) return { ...base, kind: 'procedure', members: procs.slice(0, 1) };
     return base;
+  }
+
+  /**
+   * Go to Type Definition: tipo de la expresión que termina en la palabra bajo el cursor
+   * (`this.oX`, `loX`, `goServicios.Mensajes`, `goMensajes`, `_screen.zoo.app`, `this`, …).
+   * Solo tipos deducidos: nunca cae en la búsqueda heurística por nombre.
+   */
+  typeAt(ctx: CursorContext): TypeResult | undefined {
+    const { position } = ctx;
+    const ll = ctx.ll;
+    if (!ll || ctx.offset < 0) return undefined;
+
+    // Literal de fábrica: la clase que resuelve.
+    if (ll.strings.some((s) => ctx.offset > s.start && ctx.offset < s.end)) {
+      const t = this.resolveAt(ctx);
+      if (t?.kind !== 'class' || !t.classes?.length) return undefined;
+      return { classNames: t.classes.map((c) => c.decl.name) };
+    }
+
+    const lineText = ctx.lines[position.line] ?? '';
+    const w = wordAt(lineText, position.character);
+    if (!w) return undefined;
+    const logicalStart = toOffset(ll, position.line, w.start);
+    const before = ll.masked.substring(0, logicalStart);
+    if (/\bas\s+$/i.test(before)) return this.index.hasClass(w.word) ? { classNames: [w.word] } : undefined;
+
+    const after = ll.masked.substring(toOffset(ll, position.line, w.end));
+    const seg = /^\s*\(/.test(after) ? `${w.word}()` : w.word;
+    let chain: string[] = [seg];
+    const dot = skipSpacesBack(ll.masked, logicalStart - 1);
+    if (dot >= 0 && ll.masked[dot] === '.') {
+      let recv = chainBefore(ll.masked, dot);
+      if (recv && recv.length === 0) recv = this.withChain(ctx);
+      if (!recv) return undefined;
+      if (!(recv.length === 1 && recv[0].toLowerCase() === 'm')) chain = [...recv, seg];
+    }
+    const type = this.resolveChainType(chain, ctx);
+    if (!type || type.heuristic || !type.classNames.length) return undefined;
+    return type;
   }
 
   /** String literal dentro de una llamada. */

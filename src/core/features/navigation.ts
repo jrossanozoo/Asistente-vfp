@@ -7,7 +7,7 @@ import {
 } from 'vscode-languageserver-types';
 import { ClassDecl, MemberDecl, ParsedFile, Rng } from '../model';
 import { ClassEntry, MemberEntry, SymbolIndex } from '../index/symbolIndex';
-import type { ResolvedTarget } from '../plugin';
+import type { ResolvedTarget, TypeResult } from '../plugin';
 import type { CursorContext, Resolver } from './resolve';
 
 const ZERO: Rng = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
@@ -95,6 +95,9 @@ export function definitionLocations(target: ResolvedTarget | undefined): Locatio
     }
     case 'member':
     case 'procedure': {
+      // Propiedad con tipo deducido: como una variable, F12 va a la(s) clase(s) del tipo.
+      // La declaración queda en Go to Declaration (declarationLocations).
+      if (target.classes?.length && !target.heuristic) return target.classes.map((c) => loc(c.decl.uri, c.decl.nameRange));
       const list = target.members ?? [];
       return (target.multi || target.heuristic ? list : list.slice(0, 1)).map((m) => loc(m.decl.uri, m.decl.nameRange));
     }
@@ -113,10 +116,42 @@ export function definitionLocations(target: ResolvedTarget | undefined): Locatio
 export function definitionWithLocals(target: ResolvedTarget | undefined, ctx: CursorContext): Location[] {
   if (target?.kind === 'variable') {
     const classes = target.classes ?? [];
-    if (classes.length) return (target.multi ? classes : classes.slice(0, 1)).map((c) => loc(c.decl.uri, c.decl.nameRange));
-    return target.variable ? [loc(ctx.uri, target.variable.range)] : [];
+    const decl = target.variable ? [loc(ctx.uri, target.variable.range)] : [];
+    if (classes.length) {
+      const cls = (target.multi ? classes : classes.slice(0, 1)).map((c) => loc(c.decl.uri, c.decl.nameRange));
+      // Una global (`public goX`) declarada aquí: primero la declaración, después la clase.
+      return target.variable?.kind === 'public' ? [...decl, ...cls] : cls;
+    }
+    return decl;
   }
   return definitionLocations(target);
+}
+
+/**
+ * Go to Declaration: dónde se declara el símbolo, aunque tenga un tipo deducido
+ * (la propiedad `oX = null`, la variable `local loX`), en lugar de su clase.
+ */
+export function declarationLocations(target: ResolvedTarget | undefined, ctx: CursorContext): Location[] {
+  if (!target) return [];
+  if (target.kind === 'variable') return target.variable ? [loc(ctx.uri, target.variable.range)] : definitionWithLocals(target, ctx);
+  if (target.kind === 'member') return definitionLocations({ ...target, classes: undefined });
+  return definitionLocations(target);
+}
+
+/** Go to Type Definition: las clases del tipo deducido, en orden de precedencia. */
+export function typeDefinitionLocations(index: SymbolIndex, type: TypeResult | undefined, ctx: CursorContext): Location[] {
+  if (!type) return [];
+  const seen = new Set<string>();
+  const result: Location[] = [];
+  for (const cn of type.classNames) {
+    const c = index.getClass(cn, { fromUri: ctx.uri });
+    if (!c) continue;
+    const key = `${c.decl.uri}#${c.decl.nameRange.start.line}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(loc(c.decl.uri, c.decl.nameRange));
+  }
+  return result;
 }
 
 /** Ctrl+F12: subclases de una clase u overrides de un método. */

@@ -98,5 +98,10 @@ export interface VfpPlugin {
   hover?(target: ResolvedTarget, ctx: CursorContext, api: HostApi): string[] | undefined;
   /** Opciones de parseo por archivo (por ejemplo, encabezados para generados). */
   parseHint?(path: string, api: HostApi): { headersOnly?: boolean; skip?: boolean } | undefined;
+  /**
+   * Excluye un archivo de los resultados heurísticos por nombre (receptor de tipo desconocido),
+   * por ejemplo mocks o generados. Si todos quedan excluidos, se conservan.
+   */
+  excludeHeuristic?(uri: string, api: HostApi): boolean;
   onParsed?(file: ParsedFile, api: HostApi): void;
 }

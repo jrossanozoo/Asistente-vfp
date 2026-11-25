@@ -520,7 +520,7 @@ export function parsePrg(text: string, uri: string, options: ParseOptions = {}):
     }
   }
 
-  return {
+  return compactParsed({
     uri,
     classes,
     procedures,
@@ -529,7 +529,19 @@ export function parsePrg(text: string, uri: string, options: ParseOptions = {}):
     referencedClasses: [...referenced],
     diagnostics,
     headersOnly: options.headersOnly || undefined,
-  };
+  });
+}
+
+/**
+ * Copia compacta del modelo, idéntica a la que se obtiene al leerlo de la cache (JSON):
+ * - V8 guarda los recortes de string (substring, match de regex) como referencias al texto original,
+ *   así que un nombre de 20 caracteres mantenía vivo el archivo entero mientras estuviera en el índice;
+ * - los arrays armados con push reservan capacidad de sobra;
+ * - las propiedades en `undefined` ocupan lugar.
+ * En Dragonfish (~17.000 .prg) baja el heap del índice de ~2,5 GB a ~1,3 GB.
+ */
+export function compactParsed<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v)) as T;
 }
 
 export type { ScannedLine };

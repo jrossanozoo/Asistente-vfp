@@ -8,7 +8,7 @@ import { pathToUri } from '../src/core/uri';
 import { buildCursorContext, Resolver } from '../src/core/features/resolve';
 import { hoverMarkdown } from '../src/core/features/hover';
 import { signatureHelp } from '../src/core/features/signatureHelp';
-import { definitionWithLocals, documentSymbols, implementationLocations } from '../src/core/features/navigation';
+import { definitionWithLocals, documentSymbols, implementationLocations, typeDefinitionLocations } from '../src/core/features/navigation';
 import { removeSemicolonFix, toLspDiagnostic } from '../src/core/features/diagnostics';
 import type { HostApi } from '../src/core/plugin';
 import { FIXTURES, posOf } from './helpers';
@@ -147,6 +147,30 @@ describe('definition / implementation', () => {
     const ctx = ctxAt('dragonfish/ColorYTalle_ColaboradorListaDinamica.prg', 'dodefault', 1, 2);
     const t = resolver.resolveAt(ctx)!;
     expect(t.members![0].owner!.decl.name).toBe('Felino_ColaboradorListaDinamica');
+  });
+});
+
+describe('type definition y exclusión heurística', () => {
+  const typeDef = (needle: string, delta: number) => {
+    const ctx = ctxAt('drawing/ComboListaDinamica.prg', needle, 1, delta);
+    return typeDefinitionLocations(index, resolver.typeAt(ctx), ctx).map((l) => path.basename(l.uri));
+  };
+
+  it('variable local AS, this y tipo primitivo/desconocido', () => {
+    expect(typeDef('loColaborador.ObtenerColeccion', 2)).toEqual(['ColaboradorListaDinamica.prg']);
+    expect(typeDef('this.ObtenerColaborador()', 2)).toEqual(['ComboListaDinamica.prg']);
+    expect(typeDef('lcRetorno as String', 2)).toEqual([]);
+  });
+
+  it('excludeHeuristic de un plugin filtra la búsqueda por nombre, salvo que no quede nada', () => {
+    const ctx = ctxAt('drawing/ComboListaDinamica.prg', 'loColaborador.ObtenerColeccion', 1, 2);
+    const all = resolver.fallbackByName('ObtenerConcepto', ctx);
+    expect(all.some((m) => m.decl.uri.includes('/feline/'))).toBe(true);
+    const sinFeline = new Resolver(index, () => [{ id: 'x', excludeHeuristic: (uri: string) => uri.includes('/feline/') }], () => ({}) as HostApi);
+    const filtered = sinFeline.fallbackByName('ObtenerConcepto', ctx);
+    expect(filtered.length).toBe(all.length - all.filter((m) => m.decl.uri.includes('/feline/')).length);
+    const todo = new Resolver(index, () => [{ id: 'x', excludeHeuristic: () => true }], () => ({}) as HostApi);
+    expect(todo.fallbackByName('ObtenerConcepto', ctx)).toHaveLength(all.length);
   });
 });
 

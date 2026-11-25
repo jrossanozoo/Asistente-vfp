@@ -11,6 +11,8 @@ Es la versión **genérica**: sirve para cualquier sistema VFP, no depende de do
 | **Outline** (Document Symbols) | Clases, métodos, propiedades, `add object`, funciones y procedimientos sueltos. |
 | **Ctrl+T** (Workspace Symbols) | Busca clases, funciones y métodos en todas las carpetas indexadas. |
 | **F12** (Go to Definition) | Sobre `AS Clase`, `DEFINE CLASS … AS Padre`, `OF lib.prg` (abre el archivo), `createobject("X")` y `newobject("X", "lib.prg")`, `this.Metodo`, `thisform.X`, `dodefault()` (salta al método del padre), variables con `LOCAL x AS Clase` y bloques `WITH`. Si el tipo del receptor no se conoce, devuelve los candidatos por nombre (*resolución heurística*). |
+| **Go to Type Definition** | Sobre una variable, propiedad o cadena `a.b.c`: abre la **clase** del tipo deducido (`LOCAL x AS Clase`, `this`, `thisform`, propiedades con tipo conocido). Si el tipo no se puede deducir, no devuelve nada (nunca cae en la búsqueda por nombre). |
+| **Go to Declaration** | Dónde se declara el símbolo aunque tenga un tipo deducido: la variable `LOCAL loX`, la propiedad `oX = null`, el método. |
 | **Ctrl+F12** (Go to Implementation) | Sobre una clase: sus subclases transitivas. Sobre un método: los overrides en las subclases. Incluye los repos configurados en `vfp.downstreamRoots`. |
 | **Type Hierarchy** | Supertipos y subtipos nativos de VS Code. |
 | **Hover** | Firma, docstring `NOTE` en Markdown, jerarquía, subclases y procedencia. Si un método no tiene `NOTE`, muestra el del ancestro más cercano ("Doc heredada de X") o, como respaldo, los comentarios `*` / `*!*` / `&&` de encima. |
@@ -50,10 +52,11 @@ function ObtenerLista( tcEntidad as String, tcAtributo as String ) as String
 | `vfp.index.maxFileSizeKB` | `512` | Más grandes que esto: solo encabezados. |
 | `vfp.docstring.fallbackComments` | `true` | Usar comentarios clásicos cuando no hay `NOTE`. |
 | `vfp.features.documentSymbols` | `true` | Apagarlo si otra extensión (zoo-tool-kit) ya da el Outline y se ve duplicado. |
+| `vfp.trace.server` | `"off"` | Traza del protocolo LSP en el panel de salida (para diagnosticar problemas). |
 
 Comando: **Asistente VFP: Reindexar workspace**.
 
-Los `.prg` se leen siempre como **Windows-1252**. El índice se guarda en una cache por archivo (mtime + tamaño) en el storage del workspace: la primera indexación de un repo grande (Feline, ~10.500 archivos) tarda ~30 s y las siguientes son casi instantáneas.
+Los `.prg` se leen siempre como **Windows-1252**. El índice se guarda en una cache en el storage del workspace (carpeta `index-cache`, partida en 32 archivos; cada `.prg` se valida por fecha y tamaño). La primera indexación de un repo grande tarda decenas de segundos; las siguientes leen la cache y solo reparsean los archivos que cambiaron (en un workspace de ~17.000 archivos, pocos segundos). Si la cache no se puede guardar, el error queda en el panel de salida del servidor.
 
 ## Convivencia
 

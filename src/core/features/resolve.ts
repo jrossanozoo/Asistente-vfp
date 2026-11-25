@@ -1,6 +1,6 @@
 import { ClassDecl, MemberDecl, ParsedFile, Pos, Rng, VarDecl } from '../model';
 import { ClassEntry, LayerInfo, MemberEntry, SymbolIndex } from '../index/symbolIndex';
-import { findClosingParen, isPrimitiveType, splitTopLevel } from '../parser/prgParser';
+import { findClosingParen, isPrimitiveType, memberLocals, splitTopLevel } from '../parser/prgParser';
 import { splitLines } from '../text/encoding';
 import { LogicalLine, logicalLineAt, toOffset, toPosition } from '../text/logicalLines';
 import { scanLines, ScannedLine } from '../text/scanner';
@@ -49,9 +49,11 @@ export function buildCursorContext(
     };
   }
   const candidates: MemberDecl[] = clsDecl ? clsDecl.members : parsed.procedures;
-  const member = candidates.find(
+  let member = candidates.find(
     (m) => (m.kind === 'method' || m.kind === 'procedure' || m.kind === 'function') && m.range.start.line <= line && line <= m.range.end.line,
   );
+  // El índice del workspace no guarda las variables de cada método: se recalculan solo para este.
+  if (member && !member.locals) member = { ...member, locals: memberLocals(lines, member) };
   return { uri, lines, scanned, parsed, position, ll, offset, cls, member };
 }
 

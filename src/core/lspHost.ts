@@ -389,7 +389,7 @@ export class LspHost {
         `Indexados ${total} archivos .prg en ${((Date.now() - started) / 1000).toFixed(1)} s (${this.index.classNames().length} clases).`,
       );
       for (const uri of this.documents.keys()) this.publishDiagnostics(uri);
-      await this.cache.save().catch(() => undefined);
+      await this.cache.save().catch((e: Error) => this.connection.console.error(e.message));
     };
     this.indexing = run();
     await this.indexing;

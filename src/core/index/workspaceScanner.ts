@@ -27,45 +27,153 @@ interface CacheEntry {
   m: number;
   s: number;
   h: boolean;
-  p: ParsedFile;
+  /** Modelo listo para usar (después de `get` o `set`). */
+  p?: ParsedFile;
+  /** Forma compacta tal como se leyó del disco (hasta el primer `get`). */
+  r?: unknown;
+  /** Uri del archivo (la forma compacta la reemplaza por un marcador). */
+  u?: string;
 }
 
-const CACHE_VERSION = 3;
+interface ShardFile {
+  version: number;
+  key: string;
+  entries: Record<string, { m: number; s: number; h: boolean; u: string; p: unknown }>;
+}
 
-/** Cache persistente de archivos parseados, por mtime + tamaño. */
+const CACHE_VERSION = 5;
+/** Cantidad de archivos de cache: cada uno queda lejos del límite de largo de string de V8. */
+const SHARDS = 32;
+
+// Forma compacta: los rangos {start:{line,character},end:{…}} pasan a "\u0001l,c,l,c" y la uri del
+// propio archivo a "\u0002". Un string que ya empiece con alguno de esos caracteres se escapa con "\u0003".
+const RANGE = '\u0001';
+const SELF_URI = '\u0002';
+const ESCAPE = '\u0003';
+
+function isRange(o: Record<string, unknown>): boolean {
+  const s = o.start as Record<string, unknown> | undefined;
+  const e = o.end as Record<string, unknown> | undefined;
+  return (
+    !!s &&
+    !!e &&
+    typeof s.line === 'number' &&
+    typeof s.character === 'number' &&
+    typeof e.line === 'number' &&
+    typeof e.character === 'number' &&
+    Object.keys(o).length === 2 &&
+    Object.keys(s).length === 2 &&
+    Object.keys(e).length === 2
+  );
+}
+
+/** Copia compacta de un valor del modelo (no modifica el original). */
+export function packParsed(v: unknown, uri: string): unknown {
+  if (typeof v === 'string') {
+    if (v === uri) return SELF_URI;
+    const c = v.charCodeAt(0);
+    return c >= 1 && c <= 3 ? ESCAPE + v : v;
+  }
+  if (Array.isArray(v)) return v.map((x) => packParsed(x, uri));
+  if (v !== null && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (isRange(o)) {
+      const r = o as unknown as { start: { line: number; character: number }; end: { line: number; character: number } };
+      return `${RANGE}${r.start.line},${r.start.character},${r.end.line},${r.end.character}`;
+    }
+    const out: Record<string, unknown> = {};
+    for (const k in o) {
+      const x = o[k];
+      if (x !== undefined) out[k] = packParsed(x, uri);
+    }
+    return out;
+  }
+  return v;
+}
+
+/** Inversa de `packParsed`. Reutiliza los objetos recibidos (los modifica en el lugar). */
+export function unpackParsed(v: unknown, uri: string): unknown {
+  if (typeof v === 'string') {
+    const c = v.charCodeAt(0);
+    if (c === 1) {
+      const [a, b, d, e] = v.slice(1).split(',');
+      return { start: { line: +a, character: +b }, end: { line: +d, character: +e } };
+    }
+    if (c === 2 && v.length === 1) return uri;
+    if (c === 3) return v.slice(1);
+    return v;
+  }
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) v[i] = unpackParsed(v[i], uri);
+    return v;
+  }
+  if (v !== null && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    for (const k in o) o[k] = unpackParsed(o[k], uri);
+    return o;
+  }
+  return v;
+}
+
+function shardOf(filePath: string): number {
+  // FNV-1a: estable entre corridas.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < filePath.length; i++) {
+    h ^= filePath.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % SHARDS;
+}
+
+/**
+ * Cache persistente de archivos parseados, por mtime + tamaño.
+ * `file` (por ejemplo `.../index-cache.json`) define la carpeta `.../index-cache/` donde se guardan
+ * `SHARDS` archivos; solo se reescriben los que cambiaron.
+ */
 export class ParseCache {
   private entries = new Map<string, CacheEntry>();
-  private dirty = false;
+  private readonly dirty = new Set<number>();
+  private readonly dir: string | undefined;
 
   constructor(
     private readonly file: string | undefined,
     private readonly key: string,
-  ) {}
+  ) {
+    this.dir = file ? file.replace(/\.json$/i, '') : undefined;
+  }
+
+  private shardPath(i: number): string {
+    return path.join(this.dir!, `shard-${String(i).padStart(2, '0')}.json`);
+  }
 
   async load(): Promise<void> {
-    if (!this.file) return;
-    try {
-      const raw = JSON.parse(await fs.promises.readFile(this.file, 'utf8')) as {
-        version: number;
-        key: string;
-        entries: Record<string, CacheEntry>;
-      };
-      if (raw.version !== CACHE_VERSION || raw.key !== this.key) return;
-      this.entries = new Map(Object.entries(raw.entries));
-    } catch {
-      // sin cache
-    }
+    if (!this.dir) return;
+    await Promise.all(
+      Array.from({ length: SHARDS }, async (_, i) => {
+        try {
+          const raw = JSON.parse(await fs.promises.readFile(this.shardPath(i), 'utf8')) as ShardFile;
+          if (raw.version !== CACHE_VERSION || raw.key !== this.key) return;
+          for (const [k, e] of Object.entries(raw.entries)) this.entries.set(k, { m: e.m, s: e.s, h: e.h, u: e.u, r: e.p });
+        } catch {
+          // shard ausente o ilegible: esos archivos se vuelven a parsear
+        }
+      }),
+    );
   }
 
   get(filePath: string, mtime: number, size: number, headersOnly: boolean): ParsedFile | undefined {
     const e = this.entries.get(filePath);
-    if (e && e.m === mtime && e.s === size && e.h === headersOnly) return e.p;
-    return undefined;
+    if (!e || e.m !== mtime || e.s !== size || e.h !== headersOnly) return undefined;
+    if (!e.p) {
+      e.p = unpackParsed(e.r, e.u ?? '') as ParsedFile;
+      e.r = undefined;
+    }
+    return e.p;
   }
 
   set(filePath: string, mtime: number, size: number, headersOnly: boolean, parsed: ParsedFile): void {
     this.entries.set(filePath, { m: mtime, s: size, h: headersOnly, p: parsed });
-    this.dirty = true;
+    this.dirty.add(shardOf(filePath));
   }
 
   /** Descarta entradas de archivos que ya no existen. */
@@ -73,17 +181,42 @@ export class ParseCache {
     for (const k of this.entries.keys()) {
       if (!paths.has(k)) {
         this.entries.delete(k);
-        this.dirty = true;
+        this.dirty.add(shardOf(k));
       }
     }
   }
 
+  /** Escribe los shards modificados. Si alguno falla, sigue con el resto y al final lanza el error. */
   async save(): Promise<void> {
-    if (!this.file || !this.dirty) return;
-    await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
-    const obj = { version: CACHE_VERSION, key: this.key, entries: Object.fromEntries(this.entries) };
-    await fs.promises.writeFile(this.file, JSON.stringify(obj));
-    this.dirty = false;
+    if (!this.dir || this.dirty.size === 0) return;
+    await fs.promises.mkdir(this.dir, { recursive: true });
+    const byShard = new Map<number, [string, CacheEntry][]>();
+    for (const i of this.dirty) byShard.set(i, []);
+    for (const kv of this.entries) byShard.get(shardOf(kv[0]))?.push(kv);
+    const errors: string[] = [];
+    for (const [i, list] of byShard) {
+      const target = this.shardPath(i);
+      try {
+        if (list.length === 0) {
+          await fs.promises.rm(target, { force: true });
+        } else {
+          const entries: ShardFile['entries'] = {};
+          for (const [k, e] of list) {
+            const u = e.p?.uri ?? e.u ?? '';
+            entries[k] = { m: e.m, s: e.s, h: e.h, u, p: e.p ? packParsed(e.p, u) : e.r };
+          }
+          const tmp = `${target}.tmp`;
+          await fs.promises.writeFile(tmp, JSON.stringify({ version: CACHE_VERSION, key: this.key, entries }));
+          await fs.promises.rename(tmp, target);
+        }
+        this.dirty.delete(i);
+      } catch (e) {
+        errors.push(`${path.basename(target)}: ${(e as Error).message}`);
+      }
+    }
+    // Formato anterior (un único JSON): ya no se usa.
+    if (this.file && this.file !== this.dir) await fs.promises.rm(this.file, { force: true }).catch(() => undefined);
+    if (errors.length) throw new Error(`No se pudo guardar la cache de índice (${errors.join('; ')})`);
   }
 }
 
@@ -131,6 +264,8 @@ export async function parseFile(
     headersOnly,
     callNames: options.callNames,
     fallbackComments: options.fallbackComments,
+    // Las variables de cada método se recalculan al construir un contexto de cursor (memberLocals).
+    locals: false,
   });
   options.cache?.set(filePath, stat.mtimeMs, stat.size, headersOnly, parsed);
   return { uri, parsed, layer };

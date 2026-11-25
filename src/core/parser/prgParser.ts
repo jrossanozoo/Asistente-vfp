@@ -23,6 +23,11 @@ export interface ParseOptions {
   callNames?: Iterable<string>;
   /** Usar comentarios clásicos como doc cuando no hay NOTE (por defecto true). */
   fallbackComments?: boolean;
+  /**
+   * Guardar las variables de cada método (`locals`). Por defecto true. El índice del workspace
+   * las omite (son ~40 % de su memoria): `buildCursorContext` las recalcula con `memberLocals`.
+   */
+  locals?: boolean;
 }
 
 export const DEFAULT_CALL_NAMES = ['createobject', 'newobject'];
@@ -520,6 +525,11 @@ export function parsePrg(text: string, uri: string, options: ParseOptions = {}):
     }
   }
 
+  if (options.locals === false) {
+    for (const c of classes) for (const mb of c.members) delete mb.locals;
+    for (const p of procedures) delete p.locals;
+  }
+
   return compactParsed({
     uri,
     classes,
@@ -530,6 +540,23 @@ export function parsePrg(text: string, uri: string, options: ParseOptions = {}):
     diagnostics,
     headersOnly: options.headersOnly || undefined,
   });
+}
+
+/**
+ * Variables de un método parseado sin `locals`. Parsea solo las líneas del método y después corre
+ * los números de línea, así que el costo depende del tamaño del método y no del archivo.
+ */
+export function memberLocals(lines: string[], member: MemberDecl): VarDecl[] {
+  const from = member.range.start.line;
+  const to = Math.min(member.range.end.line, lines.length - 1);
+  if (from > to) return [];
+  const parsed = parsePrg(lines.slice(from, to + 1).join('\n'), member.uri, { fallbackComments: false });
+  const m = parsed.procedures.find((p) => p.nameRange.start.line === member.nameRange.start.line - from) ?? parsed.procedures[0];
+  const shift = (r: Rng): Rng => ({
+    start: { line: r.start.line + from, character: r.start.character },
+    end: { line: r.end.line + from, character: r.end.character },
+  });
+  return (m?.locals ?? []).map((v) => ({ ...v, line: v.line + from, range: shift(v.range) }));
 }
 
 /**

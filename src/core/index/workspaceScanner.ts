@@ -41,7 +41,7 @@ interface ShardFile {
   entries: Record<string, { m: number; s: number; h: boolean; u: string; p: unknown }>;
 }
 
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 /** Cantidad de archivos de cache: cada uno queda lejos del límite de largo de string de V8. */
 const SHARDS = 32;
 
@@ -264,6 +264,8 @@ export async function parseFile(
     headersOnly,
     callNames: options.callNames,
     fallbackComments: options.fallbackComments,
+    // Las variables de cada método se recalculan al construir un contexto de cursor (memberLocals).
+    locals: false,
   });
   options.cache?.set(filePath, stat.mtimeMs, stat.size, headersOnly, parsed);
   return { uri, parsed, layer };

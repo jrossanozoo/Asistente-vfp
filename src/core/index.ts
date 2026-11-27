@@ -15,4 +15,5 @@ export * from './features/hover';
 export * from './features/signatureHelp';
 export * from './features/navigation';
 export * from './features/diagnostics';
+export * from './features/argumentTypes';
 export * from './lspHost';

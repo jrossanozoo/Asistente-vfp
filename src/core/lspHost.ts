@@ -22,6 +22,7 @@ import {
   workspaceSymbols,
 } from './features/navigation';
 import { removeSemicolonFix, toLspDiagnostic } from './features/diagnostics';
+import { argumentTypeDiagnostics } from './features/argumentTypes';
 import { readPrg, splitLines } from './text/encoding';
 import { normalizePath, normalizeUri, uriToPath } from './uri';
 
@@ -33,6 +34,8 @@ export interface CoreSettings {
   maxFileSizeKB: number;
   fallbackComments: boolean;
   documentSymbols: boolean;
+  /** Advertir cuando el tipo de un argumento no coincide con el `AS` del parámetro. */
+  argumentTypes: boolean;
 }
 
 export interface HostOptions {
@@ -46,6 +49,30 @@ export interface HostOptions {
 }
 
 export const WORKSPACE_LAYER: LayerInfo = { id: 'workspace', label: 'Workspace', priority: 0, role: 'source', quality: 'fuente' };
+
+/**
+ * Capa de la carpeta `i` del workspace, con el proyecto activo en la posición 0: el activo tiene prioridad 0 y
+ * los proyectos referenciados 1 (todos antes de `extraRoots`, fuentes de solución, .symbols y stubs).
+ */
+export function workspaceLayer(folder: string, i: number): LayerInfo {
+  return { ...WORKSPACE_LAYER, id: `workspace:${i}`, label: path.basename(folder) || 'Workspace', priority: i === 0 ? 0 : 1 };
+}
+
+/**
+ * Proyecto activo: la carpeta que está en el directorio del `.code-workspace` (la entrada `"path": "."`).
+ * Sin `.code-workspace` (una carpeta abierta sola) es la primera. Si ninguna coincide, la primera, con aviso.
+ */
+export function activeFolderIndex(folders: string[], workspaceFile: string | undefined): { index: number; note?: string } {
+  if (folders.length === 0) return { index: 0 };
+  if (!workspaceFile || /^untitled:/i.test(workspaceFile)) return { index: 0 };
+  const dir = normalizePath(path.dirname(workspaceFile)).toLowerCase();
+  const i = folders.findIndex((f) => normalizePath(f).toLowerCase() === dir);
+  if (i >= 0) return { index: i, note: `Proyecto activo: ${folders[i]}` };
+  return {
+    index: 0,
+    note: `Ninguna carpeta del workspace está en ${path.dirname(workspaceFile)} ("path": "."). Se toma ${folders[0]} como proyecto activo.`,
+  };
+}
 
 function readCoreSettings(raw: Record<string, unknown> | undefined): CoreSettings {
   const get = <T>(key: string, def: T): T => {
@@ -68,6 +95,7 @@ function readCoreSettings(raw: Record<string, unknown> | undefined): CoreSetting
     maxFileSizeKB: get('index.maxFileSizeKB', 512),
     fallbackComments: get('docstring.fallbackComments', true),
     documentSymbols: get('features.documentSymbols', true),
+    argumentTypes: get('diagnostics.argumentTypes', true),
   };
 }
 
@@ -90,6 +118,8 @@ export class LspHost {
   private indexing: Promise<void> | undefined;
   private indexGeneration = 0;
   private cache: ParseCache | undefined;
+  /** Aviso sobre cómo se eligió el proyecto activo (se registra en el primer indexado). */
+  private activeNote: string | undefined;
 
   constructor(
     readonly connection: Connection,
@@ -154,10 +184,14 @@ export class LspHost {
   start(): void {
     const c = this.connection;
     c.onInitialize((params): InitializeResult => {
-      this.workspaceFolders = (params.workspaceFolders ?? []).map((f) => uriToPath(f.uri));
-      if (this.workspaceFolders.length === 0 && params.rootUri) this.workspaceFolders = [uriToPath(params.rootUri)];
-      const init = params.initializationOptions as { storagePath?: string } | undefined;
+      const folders = (params.workspaceFolders ?? []).map((f) => uriToPath(f.uri));
+      if (folders.length === 0 && params.rootUri) folders.push(uriToPath(params.rootUri));
+      const init = params.initializationOptions as { storagePath?: string; workspaceFile?: string } | undefined;
       this.storagePath = init?.storagePath;
+      const active = activeFolderIndex(folders, init?.workspaceFile);
+      this.activeNote = active.note;
+      // El proyecto activo va primero: lo usan las prioridades de capa, las soluciones y los generados.
+      this.workspaceFolders = active.index > 0 ? [folders[active.index], ...folders.filter((_, i) => i !== active.index)] : folders;
       return { capabilities: this.capabilities() };
     });
     c.onInitialized(async () => {
@@ -301,10 +335,11 @@ export class LspHost {
   }
 
   private async computeRoots(): Promise<RootSpec[]> {
-    const roots: RootSpec[] = this.workspaceFolders.map((f, i) => ({
-      path: normalizePath(f),
-      layer: { ...WORKSPACE_LAYER, id: `workspace:${i}`, label: path.basename(f) || 'Workspace' },
-    }));
+    if (this.activeNote) {
+      this.connection.console.log(this.activeNote);
+      this.activeNote = undefined;
+    }
+    const roots: RootSpec[] = this.workspaceFolders.map((f, i) => ({ path: normalizePath(f), layer: workspaceLayer(f, i) }));
     this.settings.extraRoots.forEach((r, i) => {
       const p = this.resolveRootPath(r);
       roots.push({ path: p, layer: { id: `extra:${i}`, label: path.basename(p), priority: 10 + i, role: 'source', quality: 'fuente' } });
@@ -491,6 +526,13 @@ export class LspHost {
     const diagnostics: Diagnostic[] = base.map((d) => toLspDiagnostic(d, this.source));
     const text = doc.getText();
     const lines = splitLines(text);
+    if (this.settings.argumentTypes) {
+      try {
+        for (const d of argumentTypeDiagnostics(uri, text, parsed, this.index, this.resolver, entry.layer)) diagnostics.push(toLspDiagnostic(d, this.source));
+      } catch (e) {
+        this.connection.console.error(`Tipos de argumento: ${(e as Error).message}`);
+      }
+    }
     for (const pl of this.plugins) {
       try {
         for (const d of pl.diagnose?.(entry, { text, lines }, this.api) ?? []) diagnostics.push(toLspDiagnostic(d, this.source));

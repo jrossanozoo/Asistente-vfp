@@ -112,6 +112,11 @@
           "default": true,
           "markdownDescription": "Si un método no tiene `NOTE`, mostrar en el hover los comentarios `*`, `*!*` o `&&` que están justo encima."
         },
+        "vfp.diagnostics.argumentTypes": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Advertir cuando un argumento no coincide con el `AS` del parámetro (literales y variables con `AS` del método; solo llamadas resueltas sin heurística). Código `argTypeMismatch`."
+        },
         "vfp.features.documentSymbols": {
           "type": "boolean",
           "default": true,

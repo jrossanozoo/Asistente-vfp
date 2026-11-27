@@ -10,6 +10,7 @@ import { hoverMarkdown } from '../src/core/features/hover';
 import { signatureHelp } from '../src/core/features/signatureHelp';
 import { definitionWithLocals, documentSymbols, implementationLocations, typeDefinitionLocations } from '../src/core/features/navigation';
 import { removeSemicolonFix, toLspDiagnostic } from '../src/core/features/diagnostics';
+import { ARG_TYPE_MISMATCH, argumentTypeDiagnostics, typeGroup } from '../src/core/features/argumentTypes';
 import type { HostApi } from '../src/core/plugin';
 import { FIXTURES, posOf } from './helpers';
 
@@ -102,6 +103,67 @@ describe('signature help', () => {
     const shc = signatureHelp(index, resolver, cont)!;
     expect(shc.signatures[0].label).toMatch(/^Foo\(/);
     expect(shc.activeParameter).toBe(1);
+  });
+});
+
+describe('H5: tipo de argumento frente al AS del parámetro', () => {
+  const rel = 'misc/TiposArgumento.prg';
+  const diags = () => {
+    const text = texts.get(rel)!;
+    const uri = pathToUri(path.join(FIXTURES, rel));
+    return argumentTypeDiagnostics(uri, text, parsePrg(text, uri), index, resolver, MISC);
+  };
+  const lineOf = (needle: string) => posOf(texts.get(rel)!, needle).line;
+  const at = (line: number) => diags().filter((d) => d.range.start.line === line);
+
+  it('literales y variables con AS que no coinciden: Warning con código propio', () => {
+    const all = diags();
+    expect(all.every((d) => d.severity === 'warning' && d.code === ARG_TYPE_MISMATCH)).toBe(true);
+    const mal = at(lineOf('this.Recibir( 12,'));
+    expect(mal.map((d) => d.message.split(' (')[0])).toEqual([
+      'Tipo incorrecto: se esperaba String y se recibió Numeric',
+      'Tipo incorrecto: se esperaba Integer y se recibió Character',
+      'Tipo incorrecto: se esperaba Date y se recibió Character',
+      'Tipo incorrecto: se esperaba Logical y se recibió Numeric',
+      'Tipo incorrecto: se esperaba Custom y se recibió Character',
+    ]);
+    // El rango es el del argumento.
+    const text = texts.get(rel)!;
+    expect(mal[0].range.start).toEqual(posOf(text, '12, "dos"'));
+    expect(mal[0].range.end.character - mal[0].range.start.character).toBe(2);
+  });
+
+  it('tipos compatibles, .NULL., parámetros sin AS y variables sin tipo no se reportan', () => {
+    expect(at(lineOf('this.Recibir( "ok"'))).toEqual([]);
+    expect(at(lineOf('this.Recibir( [texto]'))).toEqual([]);
+    expect(at(lineOf('Suelta( 5 )'))).toEqual([]);
+    expect(at(lineOf('NoExiste('))).toEqual([]);
+    // AS con error de tipeo (`Stirng`, `as as String`): tipo desconocido, no se reporta.
+    expect(at(lineOf('ConTypo( 1'))).toEqual([]);
+  });
+
+  it('variables con AS del método', () => {
+    expect(at(lineOf('this.Recibir( lnCant')).map((d) => d.message.split(' (')[0])).toEqual([
+      'Tipo incorrecto: se esperaba String y se recibió Integer',
+      'Tipo incorrecto: se esperaba Integer y se recibió Character',
+      'Tipo incorrecto: se esperaba Custom y se recibió Integer',
+    ]);
+  });
+
+  it('llamadas que siguen con ; y funciones sueltas', () => {
+    expect(at(lineOf('\t\t\t.T. )')).map((d) => d.message.split(' (')[0])).toEqual(['Tipo incorrecto: se esperaba Integer y se recibió Logical']);
+    expect(at(lineOf('Suelta( "x" )')).map((d) => d.message.split(' (')[0])).toEqual(['Tipo incorrecto: se esperaba Number y se recibió Character']);
+  });
+
+  it('typeGroup: familias de tipos', () => {
+    expect(typeGroup('Integer')).toBe(typeGroup('Currency'));
+    expect(typeGroup('DateTime')).toBe(typeGroup('Date'));
+    expect(typeGroup('Memo')).toBe(typeGroup('String'));
+    expect(typeGroup('Variant')).toBeUndefined();
+    expect(typeGroup(undefined)).toBeUndefined();
+    expect(typeGroup('ColaboradorListaDinamica')).toBe('object');
+    expect(typeGroup('Stirng', (n) => index.hasClass(n))).toBeUndefined();
+    expect(typeGroup('ColaboradorListaDinamica', (n) => index.hasClass(n))).toBe('object');
   });
 });
 

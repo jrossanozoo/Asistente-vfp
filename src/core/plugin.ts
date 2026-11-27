@@ -62,6 +62,7 @@ export interface HostApi {
   resolver: Resolver;
   /** Configuración completa recibida del cliente (todas las secciones pedidas). */
   settings(): Record<string, unknown>;
+  /** Carpetas del workspace, con el proyecto activo primero (la del `.code-workspace`, `"path": "."`). */
   workspaceRoots(): string[];
   /** Texto actual de un documento (abierto o en disco). */
   getText(uri: string): Promise<string | undefined>;

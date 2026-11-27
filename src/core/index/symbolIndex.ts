@@ -74,6 +74,11 @@ export class SymbolIndex {
    * Devuelve el archivo a agregar, o undefined.
    */
   classLoader?: (name: string) => FileEntry | undefined;
+  /**
+   * Archivos de test (los define el plugin). Sus clases van al final y, resolviendo desde un archivo que no es de
+   * test, se descartan: la aplicación no depende de los tests.
+   */
+  isTestUri?: (uri: string) => boolean;
   /** Se incrementa con cada cambio (para caches derivadas). */
   version = 0;
 
@@ -129,7 +134,12 @@ export class SymbolIndex {
     this.version++;
   }
 
-  private sortEntries<T extends { layer: LayerInfo; decl: { uri: string } }>(list: T[], opts: ResolveOptions, fileType?: (t: T) => string | undefined): T[] {
+  private sortEntries<T extends { layer: LayerInfo; decl: { uri: string } }>(
+    list: T[],
+    opts: ResolveOptions,
+    fileType?: (t: T) => string | undefined,
+    namesake?: (t: T) => boolean,
+  ): T[] {
     return [...list].sort((a, b) => {
       if (opts.fromUri) {
         const sa = a.decl.uri === opts.fromUri ? 0 : 1;
@@ -139,6 +149,16 @@ export class SymbolIndex {
       const ra = a.layer.role === 'downstream' ? 1 : 0;
       const rb = b.layer.role === 'downstream' ? 1 : 0;
       if (ra !== rb) return ra - rb;
+      if (this.isTestUri) {
+        const ta = this.isTestUri(a.decl.uri) ? 1 : 0;
+        const tb = this.isTestUri(b.decl.uri) ? 1 : 0;
+        if (ta !== tb) return ta - tb;
+      }
+      if (namesake) {
+        const na = namesake(a) ? 0 : 1;
+        const nb = namesake(b) ? 0 : 1;
+        if (na !== nb) return na - nb;
+      }
       if (a.layer.priority !== b.layer.priority) return a.layer.priority - b.layer.priority;
       if (fileType) {
         const fa = FILETYPE_ORDER[fileType(a) ?? 'prg'] ?? 2;
@@ -160,7 +180,12 @@ export class SymbolIndex {
       list = this.classes.get(key);
     }
     list ??= [];
-    const sorted = this.sortEntries(list, opts, (e) => e.decl.fileType);
+    // Regla del archivo homónimo: `define class Mensajes` en mensajes.prg gana a otras clases Mensajes.
+    const namesake = (e: ClassEntry): boolean =>
+      e.decl.fileType !== 'vcx' && baseNameNoExt(uriToPath(e.fileUri ?? e.decl.uri)).toLowerCase() === key;
+    let sorted = this.sortEntries(list, opts, (e) => e.decl.fileType, namesake);
+    const isTest = this.isTestUri;
+    if (isTest && opts.fromUri && !isTest(opts.fromUri)) sorted = sorted.filter((e) => !isTest(e.decl.uri));
     if (opts.includeDownstream) return sorted;
     const source = sorted.filter((e) => e.layer.role !== 'downstream');
     return source.length ? source : sorted;

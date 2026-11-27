@@ -30,6 +30,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
     initializationOptions: {
       storagePath: context.storageUri?.fsPath ?? context.globalStorageUri.fsPath,
+      // Define el proyecto activo: la carpeta del .code-workspace ("path": ".").
+      workspaceFile: vscode.workspace.workspaceFile?.scheme === 'file' ? vscode.workspace.workspaceFile.fsPath : undefined,
     },
   };
   client = new LanguageClient('asistenteVfp', 'Asistente VFP', serverOptions, clientOptions);

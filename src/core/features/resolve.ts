@@ -183,6 +183,8 @@ function stripSuffix(seg: string): { name: string; call: boolean } {
 
 const WITH_RE = /^\s*with\s+(.+)$/i;
 const ENDWITH_RE = /^\s*endwith\b/i;
+/** Máximo de cadenas anidadas en `resolveChainType` (inferencia que depende de otra inferencia). */
+const MAX_CHAIN_NESTING = 16;
 
 export class Resolver {
   constructor(
@@ -229,9 +231,27 @@ export class Resolver {
     return found ?? locals.find((v) => v.name.toLowerCase() === lower);
   }
 
+  /**
+   * Cadenas en resolución (la inferencia de los plugins vuelve a entrar acá, p.ej. `loX = loX.Metodo()` o
+   * `this.oA = this.oB` / `this.oB = this.oA`). Una cadena que ya se está resolviendo en el mismo punto, o una
+   * anidación demasiado profunda, se corta sin tipo.
+   */
+  private readonly chainsInProgress = new Set<string>();
+
   /** Tipo de una cadena de receptor. */
   resolveChainType(chain: string[], ctx: CursorContext): TypeResult | undefined {
     if (chain.length === 0) return undefined;
+    const key = `${ctx.uri}|${ctx.position.line}|${chain.join('.').toLowerCase()}`;
+    if (this.chainsInProgress.has(key) || this.chainsInProgress.size >= MAX_CHAIN_NESTING) return undefined;
+    this.chainsInProgress.add(key);
+    try {
+      return this.resolveChainTypeOnce(chain, ctx);
+    } finally {
+      this.chainsInProgress.delete(key);
+    }
+  }
+
+  private resolveChainTypeOnce(chain: string[], ctx: CursorContext): TypeResult | undefined {
     const api = this.api();
     for (let k = chain.length; k >= 1; k--) {
       const prefix = chain.slice(0, k);
